@@ -16,9 +16,11 @@ To get an item from the key value, we use `'get key25\r' | nc localhost 11211`. 
 To build and test:
 
 Download the memcached source code and update with the two included files.
+
 ```
 configure & make
 ```
+
 To telnet: `telnet localhost 11211`.
 
 So, after we telnet, "stats cachedumps <max number of items you want to see in each slab> 
