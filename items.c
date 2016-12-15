@@ -56,6 +56,11 @@ typedef struct {
     bool run_complete;
 } crawlerstats_t;
 
+typedef struct {
+    char buf[128];
+    unsigned long time;
+} sort_struct;
+
 static item *heads[LARGEST_ID];
 static item *tails[LARGEST_ID];
 static crawler crawlers[LARGEST_ID];
@@ -87,6 +92,8 @@ void item_stats_reset(void) {
 static int lru_pull_tail(const int orig_id, const int cur_lru,
         const unsigned int total_chunks, const bool do_evict, const uint32_t cur_hv);
 static int lru_crawler_start(uint32_t id, uint32_t remaining);
+int cmpfunc (const void * a, const void * b);
+sort_struct *item_cachelru_perid(const unsigned int slabs_clsid, const unsigned int limit, unsigned int *bytes, unsigned int *num);
 
 /* Get the next CAS id for a new item. */
 /* TODO: refactor some atomics for this. */
@@ -480,6 +487,92 @@ char *item_cachedump(const unsigned int slabs_clsid, const unsigned int limit, u
     return buffer;
 }
 
+int cmpfunc (const void * a, const void * b)
+{
+    sort_struct *orderA = (sort_struct *)a;
+    sort_struct *orderB = (sort_struct *)b;
+
+    return ( orderB->time - orderA->time );
+}
+
+sort_struct *item_cachelru_perid(const unsigned int slabs_clsid, const unsigned int limit, unsigned int *bytes, unsigned int *num) {
+    unsigned int memlimit = 10 * 1024 * 1024;   /* 2MB max response size */
+    char *buffer;
+    unsigned int bufcurr;
+    item *it;
+    unsigned int len;
+    unsigned int shown = 0;
+    char key_temp[KEY_MAX_LENGTH + 1];
+    char temp[512];
+    sort_struct *tempStruct;
+    unsigned int id = slabs_clsid;
+    if (!settings.lru_maintainer_thread)
+        id |= COLD_LRU;
+
+    pthread_mutex_lock(&lru_locks[id]);
+    it = heads[id];
+
+    buffer = malloc((size_t)memlimit);
+    if (buffer == 0) {
+        return NULL;
+    }
+    tempStruct = malloc(limit*sizeof(sort_struct));
+    bufcurr = 0;
+
+    while (it != NULL && (limit == 0 || shown < limit)) {
+        assert(it->nkey <= KEY_MAX_LENGTH);
+        if (it->nbytes == 0 && it->nkey == 0) {
+            it = it->next;
+            continue;
+        }
+        /* Copy the key since it may not be null-terminated in the struct */
+        strncpy(key_temp, ITEM_key(it), it->nkey);
+        key_temp[it->nkey] = 0x00; /* terminate */
+        len = snprintf(temp, sizeof(temp), "ITEM %s [%d b; %lu s; %lu s; %hu ]\r\n",
+                       key_temp, it->nbytes - 2,
+                       (unsigned long)it->exptime + process_started, (unsigned long)it->time, (unsigned short)it->refcount);
+        if (bufcurr + len + 6 > memlimit)  /* 6 is END\r\n\0 */
+            break;
+        memcpy(buffer + bufcurr, temp, len);
+        bufcurr += len;
+        tempStruct[shown].time = (unsigned long)it->time;
+        snprintf(tempStruct[shown].buf, len, "%s",temp);
+        tempStruct[shown].buf[len] = '\0';
+        shown++;
+        it = it->next;
+    }
+    *num = shown;
+    memcpy(buffer + bufcurr, "END\r\n", 6);
+    bufcurr += 5;
+
+    *bytes = bufcurr;
+    pthread_mutex_unlock(&lru_locks[id]);
+    return tempStruct;
+}
+
+void item_cachelru(const unsigned int limit, char *final_buf, unsigned int *final_bytes){
+    unsigned int bytes, id=0, num;
+    sort_struct *tm;
+    int k,n=0;
+    sort_struct final_tm[MAX_NUMBER_OF_SLAB_CLASSES*limit];
+    for(id=1; id<MAX_NUMBER_OF_SLAB_CLASSES-1; id++) {
+        tm = item_cachelru_perid(id, limit, &bytes, &num);
+        for(k=0;k<num;k++){
+            final_tm[n].time = tm[k].time;
+            strcpy(final_tm[n].buf,tm[k].buf);
+            n++;
+        }
+    }
+
+    qsort(final_tm, n, sizeof(sort_struct), cmpfunc);
+    for(k=0;k<n;k++){
+        strcat(final_buf,final_tm[k].buf);
+        strcat(final_buf, "\n");
+        final_bytes=final_bytes+strlen(final_tm[k].buf);
+    }
+            
+}
+
 void item_stats_totals(ADD_STAT add_stats, void *c) {
     itemstats_t totals;
     memset(&totals, 0, sizeof(itemstats_t));
@@ -664,7 +757,6 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     if (it != NULL) {
         refcount_incr(&it->refcount);
 	it->refcount++;
-	printf("refcount %hu \n",(unsigned short)it->refcount);
         /* Optimization for slab reassignment. prevents popular items from
          * jamming in busy wait. Can only do this here to satisfy lock order
          * of item_lock, slabs_lock. */

@@ -2829,7 +2829,6 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
     } else if (strcmp(subcommand, "cachedump") == 0) {
         char *buf;
         unsigned int bytes, id, limit = 0;
-
         if (ntokens < 5) {
             out_string(c, "CLIENT_ERROR bad command line");
             return;
@@ -2849,28 +2848,46 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
         write_and_free(c, buf, bytes);
         return ;
     } else if (strcmp(subcommand, "cachedumps") == 0) {
-	char *buf;
-	char *final_buf;
-	unsigned int final_bytes=0;
-	unsigned int bytes, id, limit=0;
-	unsigned int memlimit = 10 * 1024 * 1024;
-	final_buf=malloc((size_t)memlimit);
-    if (ntokens < 4) {
-            out_string(c, "CLIENT_ERROR bad command line");
-            return;
-    }
-	if (!safe_strtoul(tokens[2].value, &limit)) {
-        	out_string(c, "CLIENT_ERROR bad command line format");
-	        return;
-	}
-    for(id=1; id<MAX_NUMBER_OF_SLAB_CLASSES-1; id++) {
-       	buf = item_cachedump(id, limit, &bytes);
-		strcat(buf,"\n");
-		strcat(final_buf,buf);
-		final_bytes=final_bytes+bytes;
-    }
-	write_and_free(c, final_buf, final_bytes);
-        return ;
+    	char *buf;
+    	char *final_buf;
+    	unsigned int final_bytes=0;
+    	unsigned int bytes, id, limit=0;
+    	unsigned int memlimit = 10 * 1024 * 1024;
+    	final_buf=malloc((size_t)memlimit);
+        if (ntokens < 4) {
+                out_string(c, "CLIENT_ERROR bad command line");
+                return;
+        }
+    	if (!safe_strtoul(tokens[2].value, &limit)) {
+            	out_string(c, "CLIENT_ERROR bad command line format");
+    	        return;
+    	}
+        for(id=1; id<MAX_NUMBER_OF_SLAB_CLASSES-1; id++) {
+           	buf = item_cachedump(id, limit, &bytes);
+    		strcat(buf,"\n");
+    		strcat(final_buf,buf);
+    		final_bytes=final_bytes+bytes;
+        }
+    	write_and_free(c, final_buf, final_bytes);
+            return ;
+    } else if (strcmp(subcommand, "lru") == 0) {
+        //char *buf;
+        char *final_buf;
+        unsigned int final_bytes=0;
+        unsigned int limit=0;
+        unsigned int memlimit = 10 * 1024 * 1024;
+        final_buf=malloc((size_t)memlimit);
+        if (ntokens < 4) {
+                out_string(c, "CLIENT_ERROR bad command line");
+                return;
+        }
+        if (!safe_strtoul(tokens[2].value, &limit)) {
+                out_string(c, "CLIENT_ERROR bad command line format");
+                return;
+        }
+        item_cachelru(limit, final_buf, &final_bytes);
+        write_and_free(c, final_buf, strlen(final_buf));
+            return ;
     }
 
      else if (strcmp(subcommand, "conns") == 0) {
